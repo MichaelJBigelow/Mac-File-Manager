@@ -1,0 +1,56 @@
+#!/bin/bash
+# Starts Mac File Manager from the src folder next to this app. Opening the app in Finder runs
+# this script without a Terminal window; the Python process replaces it and owns the window.
+
+set -u
+
+APP_NAME="Mac File Manager"
+BUNDLE_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_DIR="$(dirname "$BUNDLE_DIR")"
+SRC_DIR="$REPO_DIR/src"
+LOG_DIR="$HOME/Library/Logs/$APP_NAME"
+LOG_FILE="$LOG_DIR/launcher.log"
+
+alert() {
+    /usr/bin/osascript - "$1" "$2" >/dev/null 2>&1 <<'APPLESCRIPT'
+on run argv
+    display alert (item 1 of argv) message (item 2 of argv) as critical
+end run
+APPLESCRIPT
+}
+
+if [ ! -d "$SRC_DIR/mac_file_manager" ]; then
+    alert "$APP_NAME can't find its files" "Expected them in $SRC_DIR. Keep \"$APP_NAME.app\" in the repository folder next to src. If you downloaded a ZIP, macOS may have moved the app to a temporary place; clone the repository with git instead, or run: xattr -dr com.apple.quarantine \"$BUNDLE_DIR\""
+    exit 1
+fi
+
+mkdir -p "$LOG_DIR"
+: >"$LOG_FILE"
+
+# Apps opened from Finder get a minimal PATH, so look for Python in the usual places.
+# Set MFM_PYTHON to the path of a python3 to use that one instead.
+candidates=()
+if [ -n "${MFM_PYTHON:-}" ]; then
+    candidates+=("$MFM_PYTHON")
+fi
+candidates+=(
+    /opt/homebrew/bin/python3
+    /usr/local/bin/python3
+    /Library/Frameworks/Python.framework/Versions/Current/bin/python3
+)
+# /usr/bin/python3 asks to install the Command Line Tools if they are missing, so use it only
+# when they are installed.
+if /usr/bin/xcode-select -p >/dev/null 2>&1; then
+    candidates+=(/usr/bin/python3)
+fi
+
+for python in "${candidates[@]}"; do
+    if [ -x "$python" ] && "$python" -c 'import sys, tkinter; sys.exit(sys.version_info < (3, 9))' >>"$LOG_FILE" 2>&1; then
+        echo "Starting $APP_NAME with $python" >>"$LOG_FILE"
+        cd "$REPO_DIR" || exit 1
+        PYTHONPATH="$SRC_DIR" exec "$python" -m mac_file_manager >>"$LOG_FILE" 2>&1
+    fi
+done
+
+alert "$APP_NAME needs Python 3.9 or later with Tkinter" "Install Python from python.org, or run: brew install python-tk. Details are in ~/Library/Logs/$APP_NAME/launcher.log."
+exit 1
