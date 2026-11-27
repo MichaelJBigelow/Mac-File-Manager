@@ -13,7 +13,7 @@ until you empty it.
 
 ## Requirements
 
-- macOS 11 or later. Moving items to the Trash uses `/usr/bin/trash` on macOS 14 and later,
+- macOS 11 or later. Moving items to the Trash uses `/usr/bin/trash` on macOS 15 and later,
   and asks Finder on older versions (macOS then asks once for permission to control Finder).
 - Python 3.9 or later with Tkinter. Any of these works:
   - Python from [python.org](https://www.python.org/downloads/macos/) (includes Tkinter)
@@ -73,7 +73,8 @@ Each item has a type:
 - **Cache**, **Logs**, **Build output**: re-created automatically when needed.
 - **Old version**: data for a version older than the newest one on this Mac.
 - **Orphaned**: data for a project that no longer exists.
-- **App not installed**: data from an app that isn't in `/Applications` or `~/Applications`.
+- **App not installed**: data from an app that isn't in `/Applications` or `~/Applications`
+  and that Spotlight can't find anywhere else.
 - **In use**: still used by an installed tool, such as the Android SDK. Hidden unless you
   turn on *Show items still in use*.
 

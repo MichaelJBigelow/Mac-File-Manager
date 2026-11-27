@@ -1,10 +1,13 @@
 import json
 import os
 import tempfile
+import subprocess
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from mac_file_manager import leftovers
 from mac_file_manager.fsutils import ScanCancelled
 from mac_file_manager.leftovers import (
     ANDROID_STUDIO,
@@ -47,7 +50,13 @@ class LeftoversTestCase(unittest.TestCase):
         (self.apps / relative).mkdir(parents=True)
 
     def scan(self, tools=TOOLS, project_root=None):
-        items = find_leftovers(tools, home=str(self.home), project_root=project_root, app_dirs=[str(self.apps)])
+        items = find_leftovers(
+            tools,
+            home=str(self.home),
+            project_root=project_root,
+            app_dirs=[str(self.apps)],
+            use_spotlight=False,
+        )
         return {os.path.relpath(item.path, self.home): item for item in items}
 
     def kinds(self, items):
@@ -137,6 +146,66 @@ class VSCodeTest(LeftoversTestCase):
             kinds,
             {"Library/Application Support/Code": NOT_INSTALLED, ".vscode": NOT_INSTALLED},
         )
+
+    def test_installed_outside_applications_is_found_with_spotlight(self):
+        unzipped = self.home / "Downloads" / "Visual Studio Code.app"
+        unzipped.mkdir(parents=True)
+
+        def spotlight(name):
+            return [unzipped] if name == "Visual Studio Code.app" else []
+
+        with mock.patch.object(leftovers, "_spotlight_apps", side_effect=spotlight):
+            items = find_leftovers(
+                [VS_CODE], home=str(self.home), app_dirs=[str(self.apps)], use_spotlight=True
+            )
+        kinds = {os.path.relpath(item.path, self.home): item.kind for item in items}
+        self.assertEqual(kinds["Library/Application Support/Code/CachedData"], CACHE)
+        self.assertNotIn(NOT_INSTALLED, kinds.values())
+
+    def test_project_that_cannot_be_checked_is_not_orphaned(self):
+        locked = self.home / "locked"
+        make(locked / "project")
+        storage = self.support / "User" / "workspaceStorage"
+        make(storage / "private")
+        (storage / "private" / "workspace.json").write_text(
+            json.dumps({"folder": (locked / "project").as_uri()})
+        )
+        self.install("Visual Studio Code.app")
+        locked.chmod(0)  # Like a folder macOS privacy settings won't let the app read.
+        try:
+            if os.access(locked, os.X_OK):
+                self.skipTest("Permissions are not enforced for this user")
+            self.assertFalse(leftovers._is_missing(str(locked / "project")))
+            self.assertTrue(leftovers._is_missing(str(self.home / "nope")))
+            kinds = self.kinds(self.scan([VS_CODE]))
+        finally:
+            locked.chmod(0o755)
+        self.assertNotIn("Library/Application Support/Code/User/workspaceStorage/private", kinds)
+        self.assertIn("Library/Application Support/Code/User/workspaceStorage/gone", kinds)
+
+
+class SpotlightTest(unittest.TestCase):
+    def test_keeps_existing_apps_outside_the_trash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app = Path(tmp) / "Tools" / "Visual Studio Code.app"
+            trashed = Path(tmp) / ".Trash" / "Visual Studio Code.app"
+            app.mkdir(parents=True)
+            trashed.mkdir(parents=True)
+            output = "\n".join([str(app), str(trashed), str(Path(tmp) / "Gone.app"), ""])
+            with mock.patch.object(
+                leftovers.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0, output, ""),
+            ) as run:
+                self.assertEqual(leftovers._spotlight_apps("Visual Studio Code.app"), [app])
+            query = run.call_args[0][0][1]
+            self.assertIn('kMDItemFSName == "Visual Studio Code.app"', query)
+
+    def test_spotlight_failure_means_no_apps(self):
+        with mock.patch.object(
+            leftovers.subprocess, "run", side_effect=subprocess.TimeoutExpired("mdfind", 15)
+        ):
+            self.assertEqual(leftovers._spotlight_apps("Unity Hub.app"), [])
 
 
 class GradleTest(LeftoversTestCase):
@@ -269,7 +338,14 @@ class ProjectScanTest(LeftoversTestCase):
         cancel = threading.Event()
         cancel.set()
         with self.assertRaises(ScanCancelled):
-            find_leftovers(TOOLS, home=str(self.home), project_root=str(self.projects), cancel=cancel)
+            find_leftovers(
+                TOOLS,
+                home=str(self.home),
+                project_root=str(self.projects),
+                app_dirs=[str(self.apps)],
+                cancel=cancel,
+                use_spotlight=False,
+            )
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,17 +52,20 @@ def find_leftovers(
     app_dirs: Optional[Sequence[str]] = None,
     progress: Optional[ProgressCallback] = None,
     cancel: Optional[threading.Event] = None,
+    use_spotlight: bool = True,
 ) -> List[Leftover]:
     """Find leftover data for the chosen tools and measure how much space each item uses.
 
     home defaults to the user's home folder and app_dirs to /Applications and ~/Applications.
-    When project_root is given, it is also searched for project build folders.
+    An app also counts as installed if Spotlight finds it elsewhere, unless use_spotlight is
+    False. When project_root is given, it is also searched for project build folders.
     Raises ScanCancelled if cancel is set.
     """
     tools = set(tools)
     progress = progress or _no_progress
     home_path = Path(home) if home else Path.home()
-    apps = [Path(d) for d in app_dirs] if app_dirs is not None else _default_app_dirs(home_path)
+    dirs = [Path(d) for d in app_dirs] if app_dirs is not None else _default_app_dirs(home_path)
+    apps = _AppFinder(dirs, use_spotlight)
 
     progress("Checking developer tool folders…", 0, 0)
     items: List[Leftover] = []
@@ -103,14 +107,63 @@ def _default_app_dirs(home: Path) -> List[Path]:
     return [Path("/Applications"), home / "Applications"]
 
 
-def _find_apps(app_dirs: Sequence[Path], pattern: str) -> List[Path]:
-    found: List[Path] = []
-    for directory in app_dirs:
-        try:
-            found.extend(directory.glob(pattern))
-        except OSError:
-            continue
-    return found
+class _AppFinder:
+    """Finds installed apps in the Applications folders and, optionally, with Spotlight.
+
+    Spotlight matters because apps such as VS Code often run from wherever they were
+    unzipped; missing one would mark the data of an app in use as left over.
+    """
+
+    def __init__(self, app_dirs: Sequence[Path], use_spotlight: bool) -> None:
+        self.app_dirs = list(app_dirs)
+        self.use_spotlight = use_spotlight
+        self._spotlight_cache: Dict[str, List[Path]] = {}
+
+    def find(self, pattern: str) -> List[Path]:
+        """App bundles matching a glob pattern such as "Android Studio*.app"."""
+        found = set()
+        for directory in self.app_dirs:
+            try:
+                found.update(directory.glob(pattern))
+            except OSError:
+                continue
+        if self.use_spotlight:
+            name = Path(pattern).name
+            if name not in self._spotlight_cache:
+                self._spotlight_cache[name] = _spotlight_apps(name)
+            found.update(self._spotlight_cache[name])
+        return sorted(found)
+
+
+def _spotlight_apps(name_pattern: str) -> List[Path]:
+    """App bundles Spotlight knows with this file name (* allowed), except ones in a Trash."""
+    query = (
+        'kMDItemContentType == "com.apple.application-bundle" '
+        f'&& kMDItemFSName == "{name_pattern}"'
+    )
+    try:
+        completed = subprocess.run(
+            ["/usr/bin/mdfind", query], capture_output=True, text=True, timeout=15, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    apps = []
+    for line in completed.stdout.splitlines():
+        path = Path(line)
+        if line.startswith("/") and not {".Trash", ".Trashes"} & set(path.parts) and path.is_dir():
+            apps.append(path)
+    return apps
+
+
+def _is_missing(path: str) -> bool:
+    """True only when path certainly doesn't exist, not when macOS denies access to it."""
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _list_dirs(base: Path) -> List[Path]:
@@ -172,7 +225,7 @@ def _electron_caches(out: _Collector, base: Path, app_label: str) -> None:
 
 
 def _not_found_note(label: str) -> str:
-    return f"{label} is not in /Applications or ~/Applications."
+    return f"{label} was not found in /Applications, ~/Applications or by Spotlight."
 
 
 # --- Android Studio --------------------------------------------------------------------
@@ -181,12 +234,12 @@ def _not_found_note(label: str) -> str:
 _ANDROID_STUDIO_DIR = re.compile(r"^AndroidStudio(Preview)?(\d+(?:\.\d+)*)$")
 
 
-def _android_studio(home: Path, app_dirs: Sequence[Path]) -> List[Leftover]:
+def _android_studio(home: Path, apps: _AppFinder) -> List[Leftover]:
     out = _Collector(ANDROID_STUDIO)
     lib = home / "Library"
-    apps = _find_apps(app_dirs, "Android Studio*.app")
-    preview_installed = any(app.name.startswith("Android Studio Preview") for app in apps)
-    stable_installed = any(not app.name.startswith("Android Studio Preview") for app in apps)
+    bundles = apps.find("Android Studio*.app")
+    preview_installed = any(app.name.startswith("Android Studio Preview") for app in bundles)
+    stable_installed = any(not app.name.startswith("Android Studio Preview") for app in bundles)
     installed = stable_installed or preview_installed
 
     # Android Studio 4.1 and later keep one folder per version in each of these places.
@@ -279,14 +332,14 @@ _VS_CODE_VARIANTS = (
 )
 
 
-def _vs_code(home: Path, app_dirs: Sequence[Path]) -> List[Leftover]:
+def _vs_code(home: Path, apps: _AppFinder) -> List[Leftover]:
     out = _Collector(VS_CODE)
     lib = home / "Library"
     for label, app, support_name, home_folder, bundle_id in _VS_CODE_VARIANTS:
         support = lib / "Application Support" / support_name
         caches = lib / "Caches" / bundle_id
         updates = lib / "Caches" / f"{bundle_id}.ShipIt"
-        if not _find_apps(app_dirs, app):
+        if not apps.find(app):
             note = _not_found_note(label)
             out.add(support, NOT_INSTALLED, f"Settings, extension data and caches. {note}")
             out.add(home / home_folder, NOT_INSTALLED, f"Installed extensions. {note}")
@@ -324,10 +377,10 @@ def _orphaned_workspaces(storage: Path) -> Iterator[Tuple[Path, str]]:
         if parsed.scheme != "file":
             continue  # Remote, container and virtual workspaces can't be checked here.
         project = unquote(parsed.path)
-        if not project or os.path.exists(project):
-            continue
+        if not project or not _is_missing(project):
+            continue  # Still there, or macOS privacy settings don't let us check.
         parts = Path(project).parts
-        if len(parts) > 2 and parts[1] == "Volumes" and not os.path.exists(os.path.join(*parts[:3])):
+        if len(parts) > 2 and parts[1] == "Volumes" and _is_missing(os.path.join(*parts[:3])):
             continue  # On a disk that isn't connected right now.
         yield folder, project
 
@@ -418,12 +471,12 @@ def _gradle(gradle_home: Path) -> List[Leftover]:
 # --- Unity -----------------------------------------------------------------------------
 
 
-def _unity(home: Path, app_dirs: Sequence[Path]) -> List[Leftover]:
+def _unity(home: Path, apps: _AppFinder) -> List[Leftover]:
     out = _Collector(UNITY)
     lib = home / "Library"
-    hub_installed = bool(_find_apps(app_dirs, "Unity Hub.app"))
+    hub_installed = bool(apps.find("Unity Hub.app"))
     editor_installed = any(
-        _find_apps(app_dirs, pattern)
+        apps.find(pattern)
         for pattern in ("Unity/Hub/Editor/*/Unity.app", "Unity/Unity.app", "Unity*/Unity.app")
     )
     installed = hub_installed or editor_installed

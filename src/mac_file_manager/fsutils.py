@@ -41,10 +41,10 @@ PACKAGE_EXTENSIONS = frozenset(
 # file makes macOS download it, so scans skip them.
 SF_DATALESS = 0x40000000
 
-TRASH_COMMAND = "/usr/bin/trash"  # Ships with macOS 14 and later.
+TRASH_COMMAND = "/usr/bin/trash"  # Ships with macOS 15 and later.
 _TRASH_BATCH_SIZE = 200
 
-# Fallback for macOS 13 and earlier. Paths arrive as arguments, never inside the script text.
+# Fallback for macOS 14 and earlier. Paths arrive as arguments, never inside the script text.
 _FINDER_TRASH_SCRIPT = """
 on run argv
     set failures to {}
@@ -171,7 +171,7 @@ class TrashResult:
 def move_to_trash(paths: Sequence[str]) -> TrashResult:
     """Move items to the user's Trash, where they can be restored until it is emptied.
 
-    Uses /usr/bin/trash (macOS 14+) and falls back to asking Finder. An item counts as
+    Uses /usr/bin/trash (macOS 15+) and falls back to asking Finder. An item counts as
     moved once it no longer exists at its old path.
     """
     targets = list(dict.fromkeys(os.path.abspath(p) for p in paths))
