@@ -1,12 +1,21 @@
 # Mac File Manager
 
-A small macOS app, written in Python with Tkinter, that helps free up disk space.
+A small macOS app, written in Python with Tkinter, that helps software engineers get back the
+disk space their tools use up.
 
+It is made mainly for developers. IDEs and build tools keep large amounts of cached data on a
+Mac: per-version IDE caches and settings, dependency and build caches, downloaded SDKs and
+toolchains, emulator images, logs, and build folders in every project. Much of it is left
+behind when a tool updates to a new version or is uninstalled, and it can easily add up to
+tens of gigabytes. macOS's own storage settings don't say which tool it belongs to or whether
+it is safe to remove.
+
+- **Developer Leftovers** finds the caches, logs, old versions, uninstalled apps' data and
+  project build folders left by **Android Studio**, **Visual Studio Code**, **Gradle** and
+  **Unity**. It shows how much space each item uses and what kind of data it is, so you can
+  tell what is safe to remove.
 - **Duplicate Files** finds files with the same contents in a folder you choose, whatever
   their names are. You can then reveal them in Finder or move the extra copies to the Trash.
-- **Developer Leftovers** finds caches, logs, old versions, uninstalled apps' data and
-  project build folders left by **Android Studio**, **Visual Studio Code**, **Gradle** and
-  **Unity**, and shows how much space each one uses.
 
 Nothing is ever deleted outright. Items you remove go to the Trash, so you can put them back
 until you empty it.
