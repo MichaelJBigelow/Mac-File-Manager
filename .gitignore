@@ -2,3 +2,6 @@ __pycache__/
 *.py[cod]
 .venv/
 .DS_Store
+
+# Created by the app launcher on first run.
+/Mac File Manager.app/Contents/MacOS/mfm-python*

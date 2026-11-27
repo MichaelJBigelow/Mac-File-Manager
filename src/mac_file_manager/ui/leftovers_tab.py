@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import tkinter as tk
 from tkinter import ttk
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from ..fsutils import display_path, format_size, reveal_in_finder
 from ..leftovers import IN_USE, NOT_INSTALLED, TOOLS, Leftover, find_leftovers
@@ -14,11 +14,13 @@ from .common import (
     BackgroundTask,
     FolderField,
     ProgressRow,
+    card,
     confirm_trash,
     scrolled_tree,
     show_error,
     trash_with_feedback,
 )
+from .theme import Theme
 
 _COLUMNS = (
     ("tool", "Tool", 150, "w", False),
@@ -29,8 +31,10 @@ _COLUMNS = (
 
 
 class LeftoversTab(ttk.Frame):
-    def __init__(self, master: tk.Misc) -> None:
-        super().__init__(master, padding=12)
+    def __init__(self, master: tk.Misc, theme: Theme, notify: Callable[[str], None]) -> None:
+        super().__init__(master, padding=(24, 20, 24, 24))
+        self._theme = theme
+        self._notify = notify
         self.tool_vars = {tool: tk.BooleanVar(value=True) for tool in TOOLS}
         self.project_folder = tk.StringVar()
         self.show_in_use = tk.BooleanVar(value=False)
@@ -44,75 +48,88 @@ class LeftoversTab(ttk.Frame):
     # --- Layout ----------------------------------------------------------------------
 
     def _build(self) -> None:
-        ttk.Label(
+        search = card(
             self,
-            text=(
-                "Finds caches, logs, old versions and build output that developer tools leave "
-                "on your Mac."
-            ),
-        ).grid(row=0, column=0, sticky="w")
+            "Find developer leftovers",
+            "Finds caches, logs, old versions and build output that developer tools leave on your Mac.",
+        )
+        search.grid(row=0, column=0, sticky="ew")
 
-        tools = ttk.Frame(self)
-        tools.grid(row=1, column=0, sticky="w", pady=(10, 0))
-        ttk.Label(tools, text="Tools:").grid(row=0, column=0, padx=(0, 6))
-        for column, tool in enumerate(TOOLS, start=1):
-            ttk.Checkbutton(tools, text=tool, variable=self.tool_vars[tool]).grid(
-                row=0, column=column, padx=(0, 14)
+        tools = ttk.Frame(search, style="OnCard.TFrame")
+        tools.grid(row=2, column=0, sticky="ew", pady=(16, 0))
+        for column, tool in enumerate(TOOLS):
+            ttk.Checkbutton(tools, text=tool, variable=self.tool_vars[tool], style="Chip.TCheckbutton").grid(
+                row=0, column=column, padx=(0, 8)
             )
 
-        projects = ttk.Frame(self)
-        projects.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        ttk.Label(projects, text="Projects folder (optional):").grid(row=0, column=0, padx=(0, 6))
+        projects = ttk.Frame(search, style="OnCard.TFrame")
+        projects.grid(row=3, column=0, sticky="ew", pady=(16, 0))
+        ttk.Label(projects, text="Projects folder", style="Body.Card.TLabel").grid(row=0, column=0, padx=(0, 12))
         FolderField(
             projects, self.project_folder, "Choose a folder that contains your projects", clearable=True
         ).grid(row=0, column=1, sticky="ew")
-        projects.columnconfigure(1, weight=1)
         ttk.Label(
-            self,
+            projects,
             text=(
-                "Build folders are also listed for the Gradle, Android, Unity and VS Code "
-                "extension projects found in this folder."
+                "Optional. Build folders of the Gradle, Android, Unity and VS Code extension "
+                "projects in this folder are listed too."
             ),
-            foreground="gray",
-        ).grid(row=3, column=0, sticky="w", pady=(2, 0))
+            style="Caption.Card.TLabel",
+        ).grid(row=1, column=1, sticky="w", pady=(4, 0))
+        projects.columnconfigure(1, weight=1)
 
-        controls = ttk.Frame(self)
-        controls.grid(row=4, column=0, sticky="ew", pady=(10, 6))
-        self.scan_button = ttk.Button(controls, text="Find Leftovers", command=self._toggle_scan)
-        self.scan_button.grid(row=0, column=0)
-        ttk.Checkbutton(
-            controls, text="Show items still in use", variable=self.show_in_use, command=self._render
-        ).grid(row=0, column=1, padx=(12, 0))
+        controls = ttk.Frame(search, style="OnCard.TFrame")
+        controls.grid(row=4, column=0, sticky="ew", pady=(20, 0))
+        self.scan_button = ttk.Button(
+            controls, text="Find Leftovers", style="Filled.TButton", command=self._toggle_scan, width=16
+        )
+        self.scan_button.grid(row=0, column=0, sticky="nw")
         self.progress = ProgressRow(controls)
-        self.progress.grid(row=0, column=2, sticky="ew", padx=(12, 0))
-        controls.columnconfigure(2, weight=1)
+        self.progress.grid(row=0, column=1, sticky="ew", padx=(20, 0), pady=(10, 0))
+        controls.columnconfigure(1, weight=1)
+
+        results = card(self)
+        results.grid(row=1, column=0, sticky="nsew", pady=(16, 0))
+        header = ttk.Frame(results, style="OnCard.TFrame")
+        header.grid(row=0, column=0, sticky="ew")
+        ttk.Label(header, text="Results", style="Title.Card.TLabel").grid(row=0, column=0, sticky="w")
+        self.summary = ttk.Label(header, text="", style="Secondary.Card.TLabel")
+        self.summary.grid(row=0, column=1, sticky="w", padx=(12, 0))
+        ttk.Checkbutton(
+            header,
+            text="Show items still in use",
+            variable=self.show_in_use,
+            command=self._render,
+            style="Switch.TCheckbutton",
+        ).grid(row=0, column=2, sticky="e")
+        header.columnconfigure(1, weight=1)
 
         tree_frame, self.tree = scrolled_tree(
-            self, [name for name, *_ in _COLUMNS], show="headings", selectmode="extended"
+            results, [name for name, *_ in _COLUMNS], show="headings", selectmode="extended"
         )
-        tree_frame.grid(row=5, column=0, sticky="nsew")
+        tree_frame.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
         for name, title, width, anchor, stretch in _COLUMNS:
-            self.tree.heading(name, text=title, command=lambda n=name: self._sort_by(n))
+            self.tree.heading(name, text=title, anchor=anchor, command=lambda n=name: self._sort_by(n))
             self.tree.column(name, width=width, anchor=anchor, stretch=stretch)
-        self.tree.tag_configure("in_use", foreground="gray")
+        self.tree.tag_configure("in_use", foreground=self._theme.palette.outline)
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self._show_note())
         self.tree.bind("<Double-1>", lambda _event: self._reveal())
 
-        self.note = ttk.Label(self, text="", anchor="w", wraplength=900, justify="left")
-        self.note.grid(row=6, column=0, sticky="ew", pady=(6, 0))
-        self.bind("<Configure>", lambda event: self.note.configure(wraplength=max(300, event.width - 30)))
-
-        actions = ttk.Frame(self)
-        actions.grid(row=7, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(actions, text="Reveal in Finder", command=self._reveal).grid(row=0, column=0)
-        ttk.Button(actions, text="Move to Trash…", command=self._trash_selected).grid(
-            row=0, column=1, padx=(6, 0)
+        footer = ttk.Frame(results, style="OnCard.TFrame")
+        footer.grid(row=2, column=0, sticky="ew", pady=(16, 0))
+        self.note = ttk.Label(footer, text="", anchor="w", justify="left", style="Secondary.Card.TLabel")
+        self.note.grid(row=0, column=0, sticky="ew", padx=(0, 16))
+        footer.bind("<Configure>", lambda event: self.note.configure(wraplength=max(200, event.width - 360)))
+        ttk.Button(footer, text="Reveal in Finder", style="Outlined.TButton", command=self._reveal).grid(
+            row=0, column=1, padx=(0, 8)
         )
-        self.summary = ttk.Label(actions, text="", anchor="e")
-        self.summary.grid(row=0, column=2, sticky="e")
-        actions.columnconfigure(2, weight=1)
+        ttk.Button(footer, text="Move to Trash…", style="Danger.TButton", command=self._trash_selected).grid(
+            row=0, column=2
+        )
+        footer.columnconfigure(0, weight=1)
 
-        self.rowconfigure(5, weight=1)
+        results.rowconfigure(1, weight=1)
+        self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
         self.progress.idle("Click Find Leftovers to check your Mac.")
 
@@ -137,7 +154,7 @@ class LeftoversTab(ttk.Frame):
 
         self._results = []
         self._render()
-        self.scan_button.configure(text="Cancel")
+        self.scan_button.configure(text="Cancel", style="Tonal.TButton")
         self.progress.busy("Checking developer tool folders…")
         self._task = BackgroundTask(
             self,
@@ -153,7 +170,7 @@ class LeftoversTab(ttk.Frame):
 
     def _scan_ended(self, message: str) -> None:
         self._task = None
-        self.scan_button.configure(text="Find Leftovers", state="normal")
+        self.scan_button.configure(text="Find Leftovers", style="Filled.TButton", state="normal")
         self.progress.idle(message)
 
     def _scan_failed(self, error: BaseException) -> None:
@@ -257,6 +274,9 @@ class LeftoversTab(ttk.Frame):
             return
 
         result = trash_with_feedback(self, [item.path for item in selected])
+        if result.moved:
+            count = len(result.moved)
+            self._notify(f"Moved {count:,} {'item' if count == 1 else 'items'} to the Trash.")
         moved = set(result.moved)
         self._results = [item for item in self._results if os.path.abspath(item.path) not in moved]
         self._render()

@@ -39,18 +39,55 @@ candidates+=(
     /Library/Frameworks/Python.framework/Versions/Current/bin/python3
 )
 # /usr/bin/python3 asks to install the Command Line Tools if they are missing, so use it only
-# when they are installed.
+# when they are installed. (Its Tk is 8.5 today, which the check below turns down.)
 if /usr/bin/xcode-select -p >/dev/null 2>&1; then
     candidates+=(/usr/bin/python3)
 fi
 
+RUNTIME="$BUNDLE_DIR/Contents/MacOS/mfm-python"
+RUNTIME_SOURCE="$RUNTIME.source"
+
+# Prints the path of a copy, inside this bundle, of the app executable that python ($1) runs
+# GUI programs with. Running Python from inside this bundle makes macOS show this app's name
+# and icon in the Dock and menu bar instead of "Python". The copy is signed again (ad hoc),
+# because macOS kills a copy of a Developer ID-signed executable. Fails when python has no
+# such executable or the copy can't run.
+bundled_python() {
+    local gui source
+    gui="$("$1" -c 'import os, sys
+p = os.path.join(sys.base_prefix, "Resources", "Python.app", "Contents", "MacOS", "Python")
+print(p if getattr(sys, "_framework", None) and os.path.isfile(p) else "")' 2>>"$LOG_FILE")"
+    [ -n "$gui" ] || return 1
+    source="$gui $(/usr/bin/stat -f '%m %z' "$gui")"
+    if [ ! -x "$RUNTIME" ] || [ "$(cat "$RUNTIME_SOURCE" 2>/dev/null)" != "$source" ]; then
+        rm -f "$RUNTIME" "$RUNTIME_SOURCE" "$RUNTIME.tmp"
+        if ! { /bin/cp "$gui" "$RUNTIME.tmp" &&
+            /usr/bin/codesign --force --sign - "$RUNTIME.tmp" >>"$LOG_FILE" 2>&1 &&
+            /bin/mv -f "$RUNTIME.tmp" "$RUNTIME"; } >>"$LOG_FILE" 2>&1; then
+            rm -f "$RUNTIME.tmp"
+            return 1
+        fi
+        echo "$source" >"$RUNTIME_SOURCE"
+    fi
+    # Some Pythons, such as the Command Line Tools one, find their library relative to their
+    # own executable, so a copy of it can't start.
+    "$RUNTIME" -c 'import tkinter' >>"$LOG_FILE" 2>&1 || return 1
+    echo "$RUNTIME"
+}
+
 for python in "${candidates[@]}"; do
-    if [ -x "$python" ] && "$python" -c 'import sys, tkinter; sys.exit(sys.version_info < (3, 9))' >>"$LOG_FILE" 2>&1; then
-        echo "Starting $APP_NAME with $python" >>"$LOG_FILE"
+    # Tk 8.5 draws empty windows on current macOS, so Tk 8.6 or later is required.
+    if [ -x "$python" ] && "$python" -c 'import sys, tkinter; sys.exit(sys.version_info < (3, 9) or tkinter.TkVersion < 8.6)' >>"$LOG_FILE" 2>&1; then
         cd "$REPO_DIR" || exit 1
-        PYTHONPATH="$SRC_DIR" exec "$python" -m mac_file_manager >>"$LOG_FILE" 2>&1
+        export PYTHONPATH="$SRC_DIR"
+        if runtime="$(bundled_python "$python")"; then
+            echo "Starting $APP_NAME with $python, run from $runtime" >>"$LOG_FILE"
+            exec "$runtime" -m mac_file_manager >>"$LOG_FILE" 2>&1
+        fi
+        echo "Starting $APP_NAME with $python (the Dock shows it as Python)" >>"$LOG_FILE"
+        exec "$python" -m mac_file_manager >>"$LOG_FILE" 2>&1
     fi
 done
 
-alert "$APP_NAME needs Python 3.9 or later with Tkinter" "Install Python from python.org, or run: brew install python-tk. Details are in ~/Library/Logs/$APP_NAME/launcher.log."
+alert "$APP_NAME needs Python 3.9 or later with Tk 8.6 or later" "Install Python from python.org, or run: brew install python-tk. Details are in ~/Library/Logs/$APP_NAME/launcher.log."
 exit 1

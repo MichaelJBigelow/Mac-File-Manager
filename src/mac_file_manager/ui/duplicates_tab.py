@@ -5,9 +5,8 @@ from __future__ import annotations
 import os
 import time
 import tkinter as tk
-from tkinter import font as tkfont
 from tkinter import ttk
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from ..duplicates import DuplicateGroup, DuplicateScanOptions, DuplicateScanResult, FileEntry, find_duplicates
 from ..fsutils import format_size, reveal_in_finder
@@ -16,16 +15,20 @@ from .common import (
     BackgroundTask,
     FolderField,
     ProgressRow,
+    card,
     confirm_trash,
     scrolled_tree,
     show_error,
     trash_with_feedback,
 )
+from .theme import Theme
 
 
 class DuplicatesTab(ttk.Frame):
-    def __init__(self, master: tk.Misc) -> None:
-        super().__init__(master, padding=12)
+    def __init__(self, master: tk.Misc, theme: Theme, notify: Callable[[str], None]) -> None:
+        super().__init__(master, padding=(24, 20, 24, 24))
+        self._theme = theme
+        self._notify = notify
         self.folder = tk.StringVar()
         self.include_hidden = tk.BooleanVar(value=False)
         self.include_packages = tk.BooleanVar(value=False)
@@ -39,71 +42,86 @@ class DuplicatesTab(ttk.Frame):
     # --- Layout ----------------------------------------------------------------------
 
     def _build(self) -> None:
-        ttk.Label(
+        search = card(
             self,
-            text="Finds files with exactly the same contents, whatever their names.",
-        ).grid(row=0, column=0, sticky="w")
+            "Find duplicate files",
+            "Finds files with exactly the same contents, whatever their names.",
+        )
+        search.grid(row=0, column=0, sticky="ew")
 
-        folder_row = ttk.Frame(self)
-        folder_row.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        ttk.Label(folder_row, text="Folder:").grid(row=0, column=0, padx=(0, 6))
+        folder_row = ttk.Frame(search, style="OnCard.TFrame")
+        folder_row.grid(row=2, column=0, sticky="ew", pady=(16, 0))
+        ttk.Label(folder_row, text="Folder", style="Body.Card.TLabel").grid(row=0, column=0, padx=(0, 12))
         self.folder_field = FolderField(folder_row, self.folder, "Choose a folder to search for duplicates")
         self.folder_field.grid(row=0, column=1, sticky="ew")
         folder_row.columnconfigure(1, weight=1)
 
-        options = ttk.Frame(self)
-        options.grid(row=2, column=0, sticky="w", pady=(8, 0))
-        ttk.Checkbutton(options, text="Include hidden files", variable=self.include_hidden).grid(
-            row=0, column=0, padx=(0, 16)
-        )
+        options = ttk.Frame(search, style="OnCard.TFrame")
+        options.grid(row=3, column=0, sticky="ew", pady=(14, 0))
         ttk.Checkbutton(
-            options, text="Look inside apps and packages", variable=self.include_packages
-        ).grid(row=0, column=1, padx=(0, 16))
-        ttk.Label(options, text="Ignore files smaller than").grid(row=0, column=2)
-        ttk.Spinbox(
-            options, from_=0, to=10_000_000, increment=100, width=8, textvariable=self.min_size_kb
-        ).grid(row=0, column=3, padx=4)
-        ttk.Label(options, text="KB").grid(row=0, column=4)
+            options, text="Hidden files", variable=self.include_hidden, style="Chip.TCheckbutton"
+        ).grid(row=0, column=0, padx=(0, 8))
+        ttk.Checkbutton(
+            options, text="Inside apps and packages", variable=self.include_packages, style="Chip.TCheckbutton"
+        ).grid(row=0, column=1, padx=(0, 24))
+        ttk.Label(options, text="Ignore files smaller than", style="Secondary.Card.TLabel").grid(row=0, column=2)
+        ttk.Entry(options, textvariable=self.min_size_kb, width=7, justify="right").grid(row=0, column=3, padx=8)
+        ttk.Label(options, text="KB", style="Secondary.Card.TLabel").grid(row=0, column=4)
 
-        controls = ttk.Frame(self)
-        controls.grid(row=3, column=0, sticky="ew", pady=(10, 6))
-        self.scan_button = ttk.Button(controls, text="Find Duplicates", command=self._toggle_scan)
-        self.scan_button.grid(row=0, column=0)
+        controls = ttk.Frame(search, style="OnCard.TFrame")
+        controls.grid(row=4, column=0, sticky="ew", pady=(20, 0))
+        self.scan_button = ttk.Button(
+            controls, text="Find Duplicates", style="Filled.TButton", command=self._toggle_scan, width=16
+        )
+        self.scan_button.grid(row=0, column=0, sticky="nw")
         self.progress = ProgressRow(controls)
-        self.progress.grid(row=0, column=1, sticky="ew", padx=(12, 0))
+        self.progress.grid(row=0, column=1, sticky="ew", padx=(20, 0), pady=(10, 0))
         controls.columnconfigure(1, weight=1)
 
+        results = card(self)
+        results.grid(row=1, column=0, sticky="nsew", pady=(16, 0))
+        header = ttk.Frame(results, style="OnCard.TFrame")
+        header.grid(row=0, column=0, sticky="ew")
+        ttk.Label(header, text="Results", style="Title.Card.TLabel").grid(row=0, column=0, sticky="w")
+        self.summary = ttk.Label(header, text="", style="Secondary.Card.TLabel")
+        self.summary.grid(row=0, column=1, sticky="w", padx=(12, 0))
+        ttk.Button(
+            header, text="Select Extra Copies", style="Text.TButton", command=self._select_extra_copies
+        ).grid(row=0, column=2, sticky="e")
+        header.columnconfigure(1, weight=1)
+
         tree_frame, self.tree = scrolled_tree(
-            self, ("folder", "size", "modified"), selectmode="extended"
+            results, ("folder", "size", "modified"), selectmode="extended"
         )
-        tree_frame.grid(row=4, column=0, sticky="nsew")
-        self.tree.heading("#0", text="Name")
-        self.tree.heading("folder", text="Folder")
-        self.tree.heading("size", text="Size")
-        self.tree.heading("modified", text="Modified")
+        tree_frame.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
+        self.tree.heading("#0", text="Name", anchor="w")
+        self.tree.heading("folder", text="Folder", anchor="w")
+        self.tree.heading("size", text="Size", anchor="e")
+        self.tree.heading("modified", text="Modified", anchor="w")
         self.tree.column("#0", width=340, stretch=True)
         self.tree.column("folder", width=300, stretch=True)
         self.tree.column("size", width=90, anchor="e", stretch=False)
-        self.tree.column("modified", width=140, stretch=False)
-        self._group_font = tkfont.nametofont("TkDefaultFont").copy()
-        self._group_font.configure(weight="bold")
-        self.tree.tag_configure("group", font=self._group_font)
+        self.tree.column("modified", width=150, stretch=False)
+        self.tree.tag_configure(
+            "group",
+            font=self._theme.fonts.label,
+            background=self._theme.palette.surface_container,
+            foreground=self._theme.palette.on_surface,
+        )
         self.tree.bind("<Double-1>", lambda _event: self._reveal())
 
-        actions = ttk.Frame(self)
-        actions.grid(row=5, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(actions, text="Reveal in Finder", command=self._reveal).grid(row=0, column=0)
-        ttk.Button(actions, text="Select Extra Copies", command=self._select_extra_copies).grid(
-            row=0, column=1, padx=(6, 0)
+        actions = ttk.Frame(results, style="OnCard.TFrame")
+        actions.grid(row=2, column=0, sticky="ew", pady=(16, 0))
+        ttk.Button(actions, text="Reveal in Finder", style="Outlined.TButton", command=self._reveal).grid(
+            row=0, column=1, padx=(0, 8)
         )
-        ttk.Button(actions, text="Move to Trash…", command=self._trash_selected).grid(
-            row=0, column=2, padx=(6, 0)
-        )
-        self.summary = ttk.Label(actions, text="", anchor="e")
-        self.summary.grid(row=0, column=3, sticky="e")
-        actions.columnconfigure(3, weight=1)
+        ttk.Button(
+            actions, text="Move to Trash…", style="Danger.TButton", command=self._trash_selected
+        ).grid(row=0, column=2)
+        actions.columnconfigure(0, weight=1)
 
-        self.rowconfigure(4, weight=1)
+        results.rowconfigure(1, weight=1)
+        self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
         self.progress.idle("Choose a folder, then click Find Duplicates.")
 
@@ -136,7 +154,7 @@ class DuplicatesTab(ttk.Frame):
         )
         self._clear_results()
         self._root_folder = folder
-        self.scan_button.configure(text="Cancel")
+        self.scan_button.configure(text="Cancel", style="Tonal.TButton")
         self.progress.busy("Looking for files…")
         self._task = BackgroundTask(
             self,
@@ -150,7 +168,7 @@ class DuplicatesTab(ttk.Frame):
 
     def _scan_ended(self, message: str) -> None:
         self._task = None
-        self.scan_button.configure(text="Find Duplicates", state="normal")
+        self.scan_button.configure(text="Find Duplicates", style="Filled.TButton", state="normal")
         self.progress.idle(message)
 
     def _scan_failed(self, error: BaseException) -> None:
@@ -259,6 +277,8 @@ class DuplicatesTab(ttk.Frame):
             return
 
         result = trash_with_feedback(self, [self._files[item].path for item in selected])
+        if result.moved:
+            self._notify(_moved_message(len(result.moved)))
         moved = set(result.moved)
         for item in selected:
             # A row can already be gone: removing the last other copy removes the whole set.
@@ -280,3 +300,7 @@ class DuplicatesTab(ttk.Frame):
             return
         group.files = remaining
         self.tree.item(group_id, text=self._group_label(group))
+
+
+def _moved_message(count: int) -> str:
+    return f"Moved {count:,} {'item' if count == 1 else 'items'} to the Trash."

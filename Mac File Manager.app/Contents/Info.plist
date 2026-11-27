@@ -8,6 +8,8 @@
 	<string>Mac File Manager</string>
 	<key>CFBundleExecutable</key>
 	<string>Mac File Manager</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>io.github.michaeljbigelow.mac-file-manager</string>
 	<key>CFBundleInfoDictionaryVersion</key>

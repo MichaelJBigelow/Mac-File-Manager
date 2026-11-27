@@ -11,15 +11,19 @@ A small macOS app, written in Python with Tkinter, that helps free up disk space
 Nothing is ever deleted outright. Items you remove go to the Trash, so you can put them back
 until you empty it.
 
+The interface follows Material Design 3, in light or dark to match your Mac's appearance when
+the app opens.
+
 ## Requirements
 
 - macOS 11 or later. Moving items to the Trash uses `/usr/bin/trash` on macOS 15 and later,
   and asks Finder on older versions (macOS then asks once for permission to control Finder).
-- Python 3.9 or later with Tkinter. Any of these works:
-  - Python from [python.org](https://www.python.org/downloads/macos/) (includes Tkinter)
+- Python 3.9 or later with Tk 8.6 or later. Either of these works:
+  - Python from [python.org](https://www.python.org/downloads/macos/) (includes Tk)
   - Homebrew: `brew install python python-tk`
-  - The Python that comes with the Xcode Command Line Tools (`/usr/bin/python3`). Its Tk is
-    old, so the two above look better.
+
+  The Python that comes with the Xcode Command Line Tools (`/usr/bin/python3`) has Tk 8.5,
+  which draws empty windows on current macOS, so it isn't supported.
 
 There are no other dependencies.
 
@@ -46,14 +50,18 @@ won't open it from the ZIP's folder. Clone with git, or remove the quarantine fl
 xattr -dr com.apple.quarantine "Mac File Manager.app"
 ```
 
-To run it from a terminal instead:
+To run it from a terminal instead (the Dock then shows it as "Python"):
 
 ```bash
 PYTHONPATH=src python3 -m mac_file_manager
 ```
 
-While it runs, the Dock and menu bar show it as "Python", because it runs on the Python
-installation's own app.
+So that the Dock and menu bar show **Mac File Manager** and its icon rather than "Python", the
+launcher copies the executable that Python runs GUI programs with into the app as
+`Contents/MacOS/mfm-python` and signs the copy ad hoc (macOS stops a copy of a signed
+executable from running otherwise). It does this on the first launch and again whenever that
+Python changes. git ignores the copy. If the copy can't be made, the app still opens, shown as
+"Python".
 
 ## What the Developer Leftovers tab finds
 
@@ -81,13 +89,16 @@ Each item has a type:
 ## Project layout
 
 ```
-Mac File Manager.app/      Launcher (a shell script inside a macOS app bundle)
+Mac File Manager.app/      Launcher (a shell script inside a macOS app bundle) and app icon
 src/mac_file_manager/
     duplicates.py          Duplicate search (size, then a partial hash, then a full SHA-256)
     leftovers.py           Where each tool keeps its data and how it is classified
     fsutils.py             Sizes, Reveal in Finder, Move to Trash
     app.py                 Main window
+    ui/theme.py            Material Design 3 colors, type and ttk styles
+    ui/images.py           Draws the theme's rounded shapes and the app icon as PNG images
     ui/                    The two tabs and shared widgets
+tools/make_icon.py         Rebuilds Contents/Resources/AppIcon.icns
 tests/                     Unit tests
 ```
 
