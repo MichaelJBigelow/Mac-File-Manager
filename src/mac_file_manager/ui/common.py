@@ -135,7 +135,7 @@ class ProgressRow(ttk.Frame):
             self.bar.configure(maximum=total, value=done)
         elif str(self.bar.cget("mode")) != "indeterminate":
             self.bar.configure(mode="indeterminate")
-            self.bar.start(15)
+            self.bar.start(30)  # Smooth enough, at half the redraws of a 15 ms step.
         self.status.configure(text=message)
 
     def idle(self, message: str) -> None:
@@ -160,8 +160,10 @@ def card(master: tk.Misc, title: str = "", subtitle: str = "") -> ttk.Frame:
 def scrolled_tree(master: tk.Misc, columns: Sequence[str], **options: Any) -> Tuple[ttk.Frame, ttk.Treeview]:
     frame = ttk.Frame(master, style="OnCard.TFrame")
     tree = ttk.Treeview(frame, columns=tuple(columns), **options)
-    scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-    tree.configure(yscrollcommand=scrollbar.set)
+    # Tcl commands rather than Python callbacks, so scrolling never waits for Python (which a
+    # scan running in the background keeps busy).
+    scrollbar = ttk.Scrollbar(frame, orient="vertical", command=f"{tree} yview")
+    tree.configure(yscrollcommand=f"{scrollbar} set")
     tree.grid(row=0, column=0, sticky="nsew")
     scrollbar.grid(row=0, column=1, sticky="ns", padx=(4, 0))
     frame.rowconfigure(0, weight=1)

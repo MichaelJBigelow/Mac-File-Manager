@@ -135,26 +135,39 @@ class Canvas:
             return (0, 0, 0, 0)
         return (round(r / a * 255), round(g / a * 255), round(b / a * 255), round(a * 255))
 
-    def to_png(self) -> bytes:
-        rows = bytearray()
-        for y in range(self.height):
-            rows.append(0)  # No filter.
-            for x in range(self.width):
-                rows.extend(self.rgba(x, y))
+    def to_png(self, width: Optional[int] = None, height: Optional[int] = None) -> bytes:
+        """Encode as PNG. A larger width or height repeats the middle column or row to fit.
+
+        ttk fills a widget by tiling the stretchable middle of an image element, so an image
+        with a wide middle is drawn in a few pieces instead of one piece per pixel.
+        """
+        rows = [
+            b"".join(bytes(self.rgba(x, y)) for x in range(self.width)) for y in range(self.height)
+        ]
+        out_width = max(width or 0, self.width)
+        out_height = max(height or 0, self.height)
+        if out_width > self.width:
+            mid = (self.width // 2) * 4
+            repeat = out_width - self.width + 1
+            rows = [row[:mid] + row[mid : mid + 4] * repeat + row[mid + 4 :] for row in rows]
+        if out_height > self.height:
+            mid = self.height // 2
+            rows = rows[:mid] + [rows[mid]] * (out_height - self.height + 1) + rows[mid + 1 :]
 
         def chunk(kind: bytes, data: bytes) -> bytes:
             return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
-        header = struct.pack(">IIBBBBB", self.width, self.height, 8, 6, 0, 0, 0)  # 8-bit RGBA.
+        header = struct.pack(">IIBBBBB", out_width, out_height, 8, 6, 0, 0, 0)  # 8-bit RGBA.
+        raw = b"".join(b"\x00" + row for row in rows)  # Each row starts with filter type 0.
         return (
             b"\x89PNG\r\n\x1a\n"
             + chunk(b"IHDR", header)
-            + chunk(b"IDAT", zlib.compress(bytes(rows), 9))
+            + chunk(b"IDAT", zlib.compress(raw, 6))
             + chunk(b"IEND", b"")
         )
 
-    def to_base64(self) -> str:
-        return base64.b64encode(self.to_png()).decode("ascii")
+    def to_base64(self, width: Optional[int] = None, height: Optional[int] = None) -> str:
+        return base64.b64encode(self.to_png(width, height)).decode("ascii")
 
 
 # --- Theme pieces ----------------------------------------------------------------------

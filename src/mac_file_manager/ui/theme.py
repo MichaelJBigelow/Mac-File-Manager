@@ -101,6 +101,11 @@ CHIP_HEIGHT = 32
 FIELD_HEIGHT = 40
 CARD_RADIUS = 16
 
+# How large stretchable images are encoded (see Theme._shape): wider than any button or chip,
+# and than any text field or progress bar.
+WIDE = 600
+WIDER = 2000
+
 
 def is_dark_mode() -> bool:
     """True when macOS uses its dark appearance."""
@@ -164,8 +169,8 @@ class Theme:
     def card(self) -> str:
         return self.palette.surface_container_low
 
-    def image(self, canvas: images.Canvas) -> tk.PhotoImage:
-        photo = tk.PhotoImage(master=self.root, data=canvas.to_base64())
+    def image(self, canvas: images.Canvas, width: Optional[int] = None, height: Optional[int] = None) -> tk.PhotoImage:
+        photo = tk.PhotoImage(master=self.root, data=canvas.to_base64(width, height))
         self._images.append(photo)
         return photo
 
@@ -208,20 +213,61 @@ class Theme:
         self._scrollbar()
         self._progressbar()
 
-    def _shape(self, name: str, normal: images.Canvas, *states: Tuple[Any, ...], **options: Any) -> None:
-        """Create an image element from a canvas and (state, ..., canvas) pairs."""
-        specs = [tuple(state[:-1]) + (self.image(state[-1]),) for state in states]
-        self.style.element_create(name, "image", self.image(normal), *specs, **options)
+    def _shape(
+        self,
+        name: str,
+        normal: images.Canvas,
+        *states: Tuple[Any, ...],
+        stretch: Tuple[Optional[int], Optional[int]] = (None, None),
+        **options: Any,
+    ) -> None:
+        """Create an image element from a canvas and (state, ..., canvas) pairs.
+
+        ttk fills a widget by tiling the stretchable middle of an element's image, once per
+        tile. With a middle of a pixel or two, a card took over 100,000 draws and the window
+        took seconds to redraw. So the images are encoded `stretch` (width, height) large, with
+        their middle repeated, while the element still asks for only the canvas's own size.
+        """
+        width, height = stretch
+        if width:
+            options.setdefault("width", normal.width)
+        if height:
+            options.setdefault("height", normal.height)
+        specs = [tuple(state[:-1]) + (self.image(state[-1], width, height),) for state in states]
+        self.style.element_create(name, "image", self.image(normal, width, height), *specs, **options)
 
     def _frames(self) -> None:
         p = self.palette
         self.style.configure("OnCard.TFrame", background=self.card)
-        for container, color, radius in (("Card", self.card, CARD_RADIUS), ("Snackbar", p.inverse_surface, 8)):
-            size = radius * 2 + 2
-            self._shape(f"{container}.shape", images.pill(size, size, color, radius=radius), border=radius, sticky="nsew")
-            self.style.layout(f"{container}.TFrame", _framed(f"{container}.fill", f"{container}.shape"))
-            # The fill behind the rounded corners is the window background.
-            self.style.configure(f"{container}.TFrame", background=p.surface)
+
+        # A card is a plain fill with a small image in each corner. A card-sized image would
+        # be redrawn behind every widget in the card each time any of them changes (macOS
+        # redraws the whole area), which halved the frame rate.
+        r = CARD_RADIUS
+        corners = {"nw": (0, 0), "ne": (-2 * r, 0), "sw": (0, -2 * r), "se": (-2 * r, -2 * r)}
+        layout: List[Tuple[str, Dict[str, Any]]] = [("Card.fill", {"sticky": "nsew"})]
+        for corner, (dx, dy) in corners.items():
+            canvas = images.Canvas(r, r)
+            canvas.draw(images.rounded_rect(0, 0, r, r, 0), images.hex_color(p.surface))
+            canvas.draw(images.rounded_rect(dx, dy, dx + 3 * r, dy + 3 * r, r), images.hex_color(self.card))
+            self._shape(f"Card.{corner}", canvas, sticky=corner)
+            layout.append((f"Card.{corner}", {"sticky": corner}))
+        self.style.layout("Card.TFrame", layout)
+        self.style.configure("Card.TFrame", background=self.card)
+
+        # The snackbar is small and shown only briefly, so one stretched image is fine.
+        radius = 8
+        size = radius * 2 + 2
+        self._shape(
+            "Snackbar.shape",
+            images.pill(size, size, p.inverse_surface, radius=radius),
+            stretch=(800, 80),
+            border=radius,
+            sticky="nsew",
+        )
+        self.style.layout("Snackbar.TFrame", _framed("Snackbar.fill", "Snackbar.shape"))
+        # The fill behind the rounded corners is the window background.
+        self.style.configure("Snackbar.TFrame", background=p.surface)
 
     def _labels(self) -> None:
         p = self.palette
@@ -258,6 +304,7 @@ class Theme:
                 ("disabled", images.pill(w, h, disabled_fill if fill else None, disabled_fill if outline else None)),
                 ("pressed", images.pill(w, h, images.blend(base, layer, PRESSED), outline)),
                 ("active", images.pill(w, h, images.blend(base, layer, HOVER), outline)),
+                stretch=(WIDE, None),
                 border=(h // 2, 0),
                 sticky="nsew",
             )
@@ -311,6 +358,7 @@ class Theme:
             ("selected", "active", images.pill(h, h, images.blend(selected, p.on_secondary_container, HOVER), radius=8)),
             ("selected", images.pill(h, h, selected, radius=8)),
             ("active", images.pill(h, h, images.blend(card, p.on_surface_variant, HOVER), p.outline_variant, radius=8)),
+            stretch=(WIDE, None),
             border=8,
             sticky="nsew",
         )
@@ -381,6 +429,7 @@ class Theme:
             images.pill(h, h, None, p.outline, radius=6),
             ("focus", images.pill(h, h, None, p.primary, border_width=2, radius=6)),
             ("hover", images.pill(h, h, None, p.on_surface, radius=6)),
+            stretch=(WIDER, None),
             border=8,
             sticky="nsew",
         )
@@ -441,6 +490,7 @@ class Theme:
             "Material.Vertical.Scrollbar.thumb",
             _scroll_thumb(w, h, p.outline_variant),
             ("active", _scroll_thumb(w, h, p.outline)),
+            stretch=(None, WIDE),
             border=(0, 6),
             sticky="nsew",
         )
@@ -459,8 +509,14 @@ class Theme:
         """A Material linear progress indicator: a 4 px rounded bar on a tonal track."""
         p = self.palette
         w, h = 6, 4
-        self._shape("Material.Progressbar.trough", images.pill(w, h, p.secondary_container), border=(2, 0), sticky="ew")
-        self._shape("Material.Progressbar.pbar", images.pill(w, h, p.primary), border=(2, 0), sticky="nsw")
+        for name, color, sticky in (("trough", p.secondary_container, "ew"), ("pbar", p.primary, "nsw")):
+            self._shape(
+                f"Material.Progressbar.{name}",
+                images.pill(w, h, color),
+                stretch=(WIDER, None),
+                border=(2, 0),
+                sticky=sticky,
+            )
         self.style.layout(
             "Horizontal.TProgressbar",
             [

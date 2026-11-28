@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 import time
 import tkinter as tk
 from tkinter import ttk
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, Iterator, List, Optional
 
 from ..duplicates import DuplicateGroup, DuplicateScanOptions, DuplicateScanResult, FileEntry, find_duplicates
 from ..fsutils import format_size, reveal_in_finder
@@ -25,6 +26,10 @@ from .theme import Theme
 
 
 class DuplicatesTab(ttk.Frame):
+    # Sets of duplicates added to the list per step. Adding tens of thousands of rows at once
+    # would freeze the window, so they are added a batch at a time between other events.
+    INSERT_BATCH = 400
+
     def __init__(self, master: tk.Misc, theme: Theme, notify: Callable[[str], None]) -> None:
         super().__init__(master, padding=(24, 20, 24, 24))
         self._theme = theme
@@ -37,6 +42,8 @@ class DuplicatesTab(ttk.Frame):
         self._root_folder = ""
         self._groups: Dict[str, DuplicateGroup] = {}  # Tree id of a group row -> group.
         self._files: Dict[str, FileEntry] = {}  # Tree id of a file row -> file.
+        self._pending: Iterator[DuplicateGroup] = iter(())  # Sets not added to the list yet.
+        self._insert_job: Optional[str] = None
         self._build()
 
     # --- Layout ----------------------------------------------------------------------
@@ -176,19 +183,34 @@ class DuplicatesTab(ttk.Frame):
         show_error(self, "Find Duplicates", str(error))
 
     def _scan_finished(self, result: DuplicateScanResult) -> None:
-        for group in result.groups:
-            self._insert_group(group)
         message = f"Checked {result.files_scanned:,} files."
         if result.unreadable:
             message += f" {len(result.unreadable):,} could not be read."
         if result.cloud_only:
             message += f" Skipped {result.cloud_only:,} iCloud files that aren't downloaded."
         self._scan_ended(message)
-        self._update_summary()
+        self._pending = iter(result.groups)
+        self._insert_more()
 
     # --- Results ---------------------------------------------------------------------
 
+    def _insert_more(self) -> None:
+        """Add the next batch of sets to the list, and schedule the batch after it."""
+        self._insert_job = None
+        batch = list(itertools.islice(self._pending, self.INSERT_BATCH))
+        for group in batch:
+            self._insert_group(group)
+        if len(batch) == self.INSERT_BATCH:
+            self.summary.configure(text=f"Showing {len(self._groups):,} sets of duplicates…")
+            self._insert_job = self.after(1, self._insert_more)
+        else:
+            self._update_summary()
+
     def _clear_results(self) -> None:
+        if self._insert_job is not None:
+            self.after_cancel(self._insert_job)
+            self._insert_job = None
+        self._pending = iter(())
         self.tree.delete(*self.tree.get_children())
         self._groups.clear()
         self._files.clear()

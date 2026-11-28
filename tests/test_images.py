@@ -36,6 +36,17 @@ class ImagesTest(unittest.TestCase):
         self.assertEqual(rows[20][21], (0x67, 0x50, 0xA4, 255))
         self.assertTrue(0 < rows[3][8][3] < 255)  # The rounded corner's edge is anti-aliased.
 
+    def test_stretched_png_repeats_the_middle(self):
+        canvas = images.pill(42, 40, "#6750a4", "#79747e")
+        width, height, rows = decode(canvas.to_png(500, 60))
+        self.assertEqual((width, height), (500, 60))
+        _, _, small = decode(canvas.to_png())
+        # The corners are unchanged, and the stretched middle copies the middle pixels.
+        self.assertEqual(rows[0][:21], small[0][:21])
+        self.assertEqual(rows[-1][-21:], small[-1][-21:])
+        self.assertEqual(rows[30][250], small[20][21])
+        self.assertEqual(rows[0][250], small[0][21])
+
     def test_outline_only(self):
         _, _, rows = decode(images.pill(40, 40, None, "#79747e", radius=6).to_png())
         self.assertEqual(rows[20][20][3], 0)  # Inside is empty.
